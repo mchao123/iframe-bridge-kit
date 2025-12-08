@@ -1,0 +1,51 @@
+{
+  "name": "iframe-bridge-kit",
+  "version": "1.0.0",
+  "description": "A type-safe communication bridge for iframes. Define strongly typed RPC APIs for cross-window messaging with ease.",
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsup && tsup --config core.tsup.config.ts && tsup --config core.full.tsup.config.ts",
+    "dev": "tsup --watch"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    },
+    "./vite": {
+      "types": "./dist/vite.d.ts",
+      "import": "./dist/vite.mjs",
+      "require": "./dist/vite.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "keywords": [
+    "iframe",
+    "postMessage",
+    "rpc",
+    "bridge",
+    "typescript",
+    "type-safe",
+    "cross-origin",
+    "penpal",
+    "window-messaging",
+    "api-definition"
+  ],
+  "author": "ZhangSan <2306860505@qq.com>",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "tsup": "^8.5.1",
+    "vite": "^7.2.6",
+    "typescript": "^5.9.3"
+  },
+  "peerDependencies": {
+    "penpal": "^7.0.4"
+  }
+}

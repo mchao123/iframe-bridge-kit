@@ -39,6 +39,14 @@
   ],
   "author": "ZhangSan <2306860505@qq.com>",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mchao123/iframe-bridge-kit.git"
+  },
+  "homepage": "https://github.com/mchao123/iframe-bridge-kit#readme",
+  "bugs": {
+    "url": "https://github.com/mchao123/iframe-bridge-kit/issues"
+  },
   "devDependencies": {
     "@types/node": "^24.10.1",
     "tsup": "^8.5.1",

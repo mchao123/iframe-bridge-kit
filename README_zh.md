@@ -1,6 +1,6 @@
 # **iframe-bridge-kit**
 
-[English](./README.md) | [简体中文](https://github.com/mchao123/iframe-bridge-kit/README_zh-CN.md)
+[English](./README.md) | [简体中文](https://github.com/mchao123/iframe-bridge-kit/blob/master/README_zh.md)
 
 一个轻量级、**强类型**的 Host-to-Iframe（宿主到 Iframe）通信桥接库。基于 [penpal](https://www.google.com/search?q=https://github.com/aaronpowell/penpal) 构建，专为现代 TypeScript 和 Vite 项目设计。
 

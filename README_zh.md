@@ -1,167 +1,182 @@
-# **iframe-bridge-kit**
+# iframe-bridge-kit
 
 [English](./README.md) | [简体中文](https://github.com/mchao123/iframe-bridge-kit/blob/master/README_zh.md)
 
-一个轻量级、**强类型**的 Host-to-Iframe（宿主到 Iframe）通信桥接库。基于 [penpal](https://www.google.com/search?q=https://github.com/aaronpowell/penpal) 构建，专为现代 TypeScript 和 Vite 项目设计。
+`iframe-bridge-kit` 是一个基于 [Vite](https://vitejs.dev/) 和 [Penpal](https://www.google.com/search?q=https://github.com/google/penpal) 的 iframe 通信库。它通过 Vite 插件自动生成类型定义，让你在 iframe (子窗口) 中调用父窗口方法时，能够享受到 **100% 的 TypeScript 类型提示**，就像调用本地函数一样简单。
 
-它提供了类型安全的 RPC（远程过程调用）机制和事件发射系统，让跨窗口通信就像调用本地异步函数一样简单。
+## ✨ 特性
 
-## **特性**
+  * 🔒 **类型安全**: 基于源码自动生成 `.d.ts`，父子窗口共享完全一致的类型。
+  * 🚀 **零运行时定义**: 子窗口无需手动定义接口，直接导入生成的桥接文件即可使用。
+  * 📡 **RPC 风格**: 像调用 `async` 函数一样调用跨窗口方法。
+  * ⚡ **事件机制**: 支持父窗口向子窗口发送强类型的广播消息。
+  * 🛠 **Vite 集成**: 专为 Vite 生态设计，支持热更新。
 
-  * 🔒 **类型安全的 RPC**: 在 Host 端定义 API，在 Iframe 端调用时享受完整的 TypeScript 自动补全。
-  * 📨 **事件发射**: 轻松地从 Host 发送类型化的事件到 Iframe。
-  * 🚀 **基于 Proxy 的 API**: 通过 Proxy 对象直接调用远程方法，无需繁琐的字符串匹配。
-  * 📦 **零配置客户端**: 核心客户端逻辑自动处理连接建立。
+## 📦 安装
 
-## **安装**
+你需要同时安装 `iframe-bridge-kit` 和它的对等依赖 `penpal`。
 
 ```bash
 npm install iframe-bridge-kit penpal
 # 或者
 pnpm add iframe-bridge-kit penpal
+# 或者
+yarn add iframe-bridge-kit penpal
 ```
 
-**注意**: `penpal` 是对等依赖（peer dependency），必须与本包同时安装。
+## ⚙️ 配置
 
-## **使用方法**
-
-### **1. Host 端 (父窗口)**
-
-定义你想暴露给 Iframe 的方法，并指定你可能发送给它的事件。
-
-```typescript
-// host.ts
-import { defineBridge } from 'iframe-bridge-kit';
-
-// 1. 定义 Host 发送给 Iframe 的事件类型
-type HostEvents = {
-  'theme-change': 'dark' | 'light';
-  'user-update': { id: number; name: string };
-};
-
-// 2. 定义 Iframe 可以调用的方法
-const bridgeMethods = {
-  add: (a: number, b: number) => a + b,
-  greet: (name: string) => `Hello, ${name}!`
-};
-
-// 3. 创建桥接定义
-// 泛型参数 <HostEvents> 确保了 emit 时的类型安全
-export const myBridge = defineBridge<HostEvents>('my-bridge-scope', bridgeMethods);
-
-// 4. 挂载到 iframe (当 DOM 中的 iframe 元素准备好时)
-const iframe = document.querySelector('iframe');
-
-// create 返回一个实例来控制这个特定的 iframe 连接
-// 第二个参数是出于安全考虑的允许源（allowed origins）列表
-const bridgeInstance = await myBridge.create(iframe, ['http://localhost:3000']);
-
-// 现在你可以向 iframe 发送事件了
-bridgeInstance.emit('theme-change', 'dark');
-```
-
-### **2. Client 端 (Iframe)**
-
-在你的 Iframe 项目中，导入核心模块以访问 Host 方法并监听事件。
-
-**重要**: 你必须在 Iframe 项目中使用配套的 Vite 插件（见第 3 节），因为它负责注入安全令牌。
-
-```typescript
-// iframe.ts
-import api, { onMessage, isInit, onInit } from 'iframe-bridge-kit/core';
-
-// 1. 调用 Host 方法
-// `api` 是一个 Proxy 对象。所有方法调用都会返回一个 Promise。
-const initIframe = async () => {
-  // 可选: 如果需要立即使用，可以等待连接建立
-  if (!isInit()) {
-    await new Promise(resolve => onInit(resolve));
-  }
-
-  // 调用在 Host 中定义的方法
-  const sum = await api.add(10, 20);
-  console.log(sum); // 30
-
-  const greeting = await api.greet('ZhangSan');
-  console.log(greeting);
-};
-
-// 2. 监听 Host 事件
-const cleanup = onMessage('theme-change', (theme) => {
-  console.log('主题变更为:', theme);
-});
-
-initIframe();
-```
-
-### **3. Vite 配置 (Iframe 端必须)**
-
-本库依赖一个 Vite 插件将 `allowedOrigins` 注入到客户端代码中。
-
-请在 **Iframe 项目**的 `vite.config.ts` 中进行配置：
+在你的 `vite.config.ts` 中引入插件。
 
 ```typescript
 // vite.config.ts
-import { defineConfig } from 'vite';
-import { iframeBridge } from 'iframe-bridge-kit/vite';
+import { defineConfig } from 'vite'
+import vue from '@vitejs/plugin-vue' // 或其他框架插件
+import vitePluginIframeBridge from 'iframe-bridge-kit/vite'
 
 export default defineConfig({
   plugins: [
-    iframeBridge({
-      // Host (父) 应用的 URL
-      allowedOrigins: ['http://localhost:8080'],
-
-      // 可选: 桥接资源的输出目录
-      outDir: 'dist',
+    vue(),
+    vitePluginIframeBridge({
+      // 输出目录，默认为 'src/bridges' (建议放入 src 下以便导入)
+      outDir: 'src/bridges', 
+      // 是否生成完整版代码 (包含 Penpal 依赖)，默认为 true
+      full: true 
     })
   ]
-});
+})
 ```
 
-## **API 参考**
+## 📖 使用指南
 
-### **Host API**
+### 1\. 父窗口 (Host/Parent)
 
-#### **defineBridge\<TEmit\>(name, methods)**
+在父窗口中，使用 `defineBridge` 定义暴露给 iframe 的方法和事件类型。
 
-创建一个桥接定义。
+```typescript
+// src/views/Parent.vue (或其他 .ts 文件)
+import { defineBridge } from 'iframe-bridge-kit'
+import { ref, onMounted } from 'vue'
 
-  * **TEmit**: 描述从 Host 发送到 Iframe 的事件的 TypeScript 接口。
-  * **name**: 桥接的唯一命名空间。
-  * **methods**: 暴露给 Iframe 的包含函数的对象。
+// 定义 Parent 发送给 Child 的事件类型
+interface EmitMap {
+  'theme-change': { mode: 'dark' | 'light' }
+  'user-logout': void
+}
 
-#### **bridgeDef.create(iframe, allowedOrigins)**
+// 1. 定义 Bridge
+// 第一个参数 'app-bridge' 是桥接名称，将用于生成文件夹名
+export const mainBridge = defineBridge<EmitMap>('app-bridge', {
+  // 暴露给 iframe 的方法
+  async getUserInfo(id: string) {
+    return { id, name: 'John Doe', role: 'admin' }
+  },
+  
+  updateTitle(title: string) {
+    document.title = title
+    return true
+  }
+})
 
-连接到一个指定的 iframe 元素。
+// 2. 绑定 iframe
+const iframeRef = ref<HTMLIFrameElement>()
 
-  * **iframe**: HTMLIFrameElement。
-  * **allowedOrigins**: 字符串数组（例如 `['http://localhost:3000']`），用于安全验证。
-  * **Returns**: 解析为 `BridgeInstance` 的 Promise。
+onMounted(async () => {
+  if (iframeRef.value) {
+    const child = await mainBridge.create(iframeRef.value)
+    
+    // 向 iframe 发送消息
+    child.emit('theme-change', { mode: 'dark' })
+  }
+})
+```
 
-#### **BridgeInstance.emit(type, data)**
+> **注意**: 保存文件后，Vite 插件会自动扫描 `defineBridge`，并在 `src/bridges/app-bridge/` 下生成对应的类型定义和运行时代码。
 
-向已连接的 Iframe 发送类型化消息。
+### 2\. 子窗口 (Iframe/Child)
 
-### **Client API (iframe-bridge-kit/core)**
+在 iframe 项目中，**直接导入插件生成的文件**。所有的 API 方法都拥有严格的类型推断。
 
-#### **api (默认导出)**
+```typescript
+// src/views/IframeChild.vue
+// 从生成的目录导入 (路径取决于你的 outDir 配置)
+import ParentApi, { onMessage, onInit } from '../bridges/app-bridge'
 
-一个 Proxy 对象。在此对象上调用的任何方法都会通过 penpal 发送到 Host。返回一个 Promise。
+// 等待连接初始化完成 (可选)
+onInit(() => {
+  console.log('Bridge connected!')
+})
 
-#### **onMessage(type, callback, once?)**
+// 1. 调用父窗口方法 (RPC)
+async function fetchUser() {
+  // ✅ 这里的 id 和返回值都有完整的类型提示！
+  const user = await ParentApi.getUserInfo('123')
+  console.log(user.name) 
+}
 
-注册一个监听器，用于接收来自 Host 的事件。
+// 2. 监听父窗口消息
+// ✅ 'theme-change' 和回调参数 data 都有类型提示
+onMessage('theme-change', (data) => {
+  console.log('New theme:', data.mode)
+})
+```
 
-  * 返回一个清理（cleanup）函数。
+## 🧩 类型支持详情
 
-#### **isInit()**
+`iframe-bridge-kit` 的核心魔法在于它如何处理类型。
 
-返回布尔值。检查与父级的连接是否已建立。
+当你定义方法时：
 
-#### **onInit(callback)**
+```typescript
+getUserInfo(id: string): Promise<User>
+```
 
-注册一个回调函数，当连接建立时执行。
+插件会提取 `User` 接口（甚至包括从 node\_modules 导入的类型），并将其**复制**到生成的 `index.d.ts` 中。这意味着子窗口不需要访问父窗口的源码，也不需要安装父窗口的依赖，就能获得完美的类型提示。
 
-## **许可**
+### 支持的类型特性
 
-MIT © [ZhangSan](https://github.com/mchao123)
+  * 基本类型 (string, number, boolean)
+  * 接口与类型别名 (Interface & Type Alias)
+  * 泛型展开
+  * 第三方库类型 (自动处理 import 路径)
+
+## 🔌 API 参考
+
+### `defineBridge<TEmit>(name, methods)`
+
+  * **name**: `string` - 桥接名称，决定生成文件的目录名。
+  * **methods**: `Object` - 暴露给子窗口的方法集合。
+  * **TEmit**: `Generic` - (可选) 定义父窗口通过 `emit` 发送的事件类型映射。
+
+返回一个对象，包含：
+
+  * `create(iframeEl, allowedOrigins?)`: 初始化连接，返回 `{ emit }` 对象。
+
+### Vite 插件配置 (`IframeBridgeOptions`)
+
+| 选项 | 类型 | 默认值 | 描述 |
+|:---|:---|:---|:---|
+| `outDir` | `string` | `'bridges'` | 生成代码的输出目录。建议设为 `'src/bridges'`。 |
+| `allowedOrigins` | `string[]` | `['*']` | 允许通信的源域名列表。 |
+| `full` | `boolean` | `true` | 是否生成包含完整依赖的代码。 |
+| `preserveModules` | `string[]` | `[]` | 保留特定模块的导入而不是展开类型（例如 `['vue']`）。 |
+
+### 生成的 Child API
+
+假设 `outDir` 为 `src/bridges`，桥接名为 `my-bridge`，你可以从 `src/bridges/my-bridge` 导入：
+
+  * **`default` (ParentApi)**: 包含所有父窗口方法的代理对象。所有方法均返回 `Promise`。
+  * **`onMessage(type, callback, once?)`**: 监听父窗口发出的事件。
+  * **`offMessage(type, callback?)`**: 取消监听。
+  * **`onInit(callback)`**: 当连接建立成功时触发。
+  * **`isInit()`**: 返回当前连接状态。
+
+## ⚠️ 注意事项
+
+1.  **同源策略**: 虽然 Penpal 简化了 postMessage，但请确保正确配置 `allowedOrigins` 以保证安全性。
+2.  **构建顺序**: 在生产构建时，确保包含 `defineBridge` 的文件被正确处理。通常只要这些文件在你的源码树中（被 import 引用），Vite 插件就能扫描到。
+3.  **JSON 序列化**: 跨窗口传输的数据必须是可 JSON 序列化的（不支持 Function, DOM 节点等）。
+
+## License
+
+MIT © ZhangSan

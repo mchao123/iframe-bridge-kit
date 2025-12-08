@@ -1,162 +1,182 @@
-# **iframe-bridge-kit**
+# iframe-bridge-kit
 
 [English](./README.md) | [简体中文](https://github.com/mchao123/iframe-bridge-kit/blob/master/README_zh.md)
 
-A lightweight, **strongly-typed** bridge for Host-to-Iframe communication. Built on top of [penpal](https://www.google.com/search?q=https://github.com/aaronpowell/penpal), designed for modern TypeScript and Vite projects.
+`iframe-bridge-kit` is an iframe communication library based on [Vite](https://vitejs.dev/) and [Penpal](https://www.google.com/search?q=https://github.com/google/penpal). It uses a Vite plugin to automatically generate type definitions, allowing you to call parent window methods from the iframe (child window) with **100% TypeScript type hints**, just like calling local functions.
 
-It provides a type-safe RPC (Remote Procedure Call) mechanism and event emission system, making cross-window communication as easy as calling local async functions.
+## ✨ Features
 
-## **Features**
+  * 🔒 **Type Safe**: Automatically generates `.d.ts` based on source code; parent and child windows share identical types.
+  * 🚀 **Zero Runtime Definition**: No need to manually define interfaces in the child window; simply import the generated bridge file to use.
+  * 📡 **RPC Style**: Call cross-window methods just like calling `async` functions.
+  * ⚡ **Event Mechanism**: Supports sending strongly-typed broadcast messages from the parent window to the child window.
+  * 🛠 **Vite Integration**: Designed specifically for the Vite ecosystem with HMR support.
 
-* 🔒 **Type-Safe RPC**: Define APIs on the Host, call them from the Iframe with full TypeScript autocompletion.  
-* 📨 **Event Emission**: Send typed events from Host to Iframe easily. 
-* 🚀 **Proxy-based API**: Call remote methods directly via a Proxy object without messy string matching.  
-* 📦 **Zero-config Client**: The core client logic handles connection establishment automatically.
+## 📦 Installation
 
-## **Installation**
+You need to install both `iframe-bridge-kit` and its peer dependency `penpal`.
 
-npm install iframe-bridge-kit penpal  
-# or  
+```bash
+npm install iframe-bridge-kit penpal
+# or
 pnpm add iframe-bridge-kit penpal
-
-**Note**: penpal is a peer dependency and must be installed alongside this package.
-
-## **Usage**
-
-### **1. Host Side (Parent Window)**
-
-Define the methods you want to expose to the Iframe, and specify the events you might emit to it.
-```typescript
-// host.ts  
-import { defineBridge } from 'iframe-bridge-kit';
-
-// 1. Define Event types that Host sends to Iframe  
-type HostEvents = {  
-  'theme-change': 'dark' | 'light';  
-  'user-update': { id: number; name: string };  
-};
-
-// 2. Define methods that Iframe can call  
-const bridgeMethods = {  
-  add: (a: number, b: number) => a + b,  
-  greet: (name: string) => `Hello, ${name}!`  
-};
-
-// 3. Create the bridge definition  
-export const myBridge = defineBridge<HostEvents>('my-bridge-scope', bridgeMethods);
-
-// 4. Mount to iframe (when iframe element is ready in DOM)  
-const iframe = document.querySelector('iframe');
-
-// create returns an instance to control this specific iframe connection  
-// The second argument is the list of allowed origins for security  
-const bridgeInstance = await myBridge.create(iframe, ['http://localhost:3000']);
-
-// Now you can emit events to the iframe  
-bridgeInstance.emit('theme-change', 'dark');
+# or
+yarn add iframe-bridge-kit penpal
 ```
 
-### **2. Client Side (Iframe)**
+## ⚙️ Configuration
 
-In your Iframe project, import the core module to access Host methods and listen for events.
-
-**Important**: You must use the accompanying Vite plugin in your Iframe project (see section 3) because it handles the security token injection.
+Import the plugin in your `vite.config.ts`.
 
 ```typescript
-// iframe.ts  
-import api, { onMessage, isInit, onInit } from 'iframe-bridge-kit/core';
+// vite.config.ts
+import { defineConfig } from 'vite'
+import vue from '@vitejs/plugin-vue' // or other framework plugins
+import vitePluginIframeBridge from 'iframe-bridge-kit/vite'
 
-// 1. Call Host Methods  
-// `api` is a Proxy. All method calls return a Promise.  
-const initIframe = async () => {  
-  // Optional: Wait for connection if needed immediately  
-  if (!isInit()) {  
-    await new Promise(resolve => onInit(resolve));  
+export default defineConfig({
+  plugins: [
+    vue(),
+    vitePluginIframeBridge({
+      // Output directory, default is 'src/bridges' (recommended to place under src for easy import)
+      outDir: 'src/bridges', 
+      // Whether to generate full code (including Penpal dependency), default is true
+      full: true 
+    })
+  ]
+})
+```
+
+## 📖 Usage Guide
+
+### 1\. Parent Window (Host/Parent)
+
+In the parent window, use `defineBridge` to define the methods and event types exposed to the iframe.
+
+```typescript
+// src/views/Parent.vue (or other .ts files)
+import { defineBridge } from 'iframe-bridge-kit'
+import { ref, onMounted } from 'vue'
+
+// Define event types sent from Parent to Child
+interface EmitMap {
+  'theme-change': { mode: 'dark' | 'light' }
+  'user-logout': void
+}
+
+// 1. Define Bridge
+// The first argument 'app-bridge' is the bridge name, used for folder generation
+export const mainBridge = defineBridge<EmitMap>('app-bridge', {
+  // Methods exposed to the iframe
+  async getUserInfo(id: string) {
+    return { id, name: 'John Doe', role: 'admin' }
+  },
+  
+  updateTitle(title: string) {
+    document.title = title
+    return true
   }
+})
 
-  // Call methods defined in Host  
-  const sum = await api.add(10, 20);   
-  console.log(sum); // 30  
+// 2. Bind iframe
+const iframeRef = ref<HTMLIFrameElement>()
+
+onMounted(async () => {
+  if (iframeRef.value) {
+    const child = await mainBridge.create(iframeRef.value)
     
-  const greeting = await api.greet('ZhangSan');  
-  console.log(greeting);  
-};
-
-// 2. Listen for Host Events  
-const cleanup = onMessage('theme-change', (theme) => {  
-  console.log('Theme changed to:', theme);  
-});
-
-initIframe();
+    // Send message to iframe
+    child.emit('theme-change', { mode: 'dark' })
+  }
+})
 ```
 
-### **3. Vite Configuration (Required for Iframe)**
+> **Note**: After saving the file, the Vite plugin will automatically scan for `defineBridge` and generate the corresponding type definitions and runtime code under `src/bridges/app-bridge/`.
 
-This library relies on a Vite plugin to inject the allowedOrigins into the client code.
+### 2\. Child Window (Iframe/Child)
 
-Configure this in your **Iframe project's** vite.config.ts:
+In the iframe project, **directly import the file generated by the plugin**. All API methods have strict type inference.
+
 ```typescript
-// vite.config.ts  
-import { defineConfig } from 'vite';  
-import { iframeBridge } from 'iframe-bridge-kit/vite';
+// src/views/IframeChild.vue
+// Import from the generated directory (path depends on your outDir config)
+import ParentApi, { onMessage, onInit } from '../bridges/app-bridge'
 
-export default defineConfig({  
-  plugins: [  
-    iframeBridge({  
-      // The URL of the Host (Parent) application  
-      allowedOrigins: ['http://localhost:8080'],   
-        
-      // Optional: Output directory for bridge assets  
-      outDir: 'dist',  
-    })  
-  ]  
-});
+// Wait for connection initialization (optional)
+onInit(() => {
+  console.log('Bridge connected!')
+})
+
+// 1. Call parent window methods (RPC)
+async function fetchUser() {
+  // ✅ Full type hints for id and return value here!
+  const user = await ParentApi.getUserInfo('123')
+  console.log(user.name) 
+}
+
+// 2. Listen for parent window messages
+// ✅ Type hints for 'theme-change' and callback data
+onMessage('theme-change', (data) => {
+  console.log('New theme:', data.mode)
+})
 ```
 
-## **API Reference**
+## 🧩 Type Support Details
 
-### **Host API**
+The core magic of `iframe-bridge-kit` lies in how it handles types.
 
-#### **defineBridge<TEmit>(name, methods)**
+When you define methods:
 
-Creates a bridge definition.
+```typescript
+getUserInfo(id: string): Promise<User>
+```
 
-* **TEmit**: TypeScript interface describing the events sent from Host to Iframe.  
-* **name**: Unique namespace for the bridge.  
-* **methods**: Object containing functions exposed to the Iframe.
+The plugin extracts the `User` interface (even types imported from `node_modules`) and **copies** it into the generated `index.d.ts`. This means the child window does not need access to the parent's source code or dependencies to get perfect type hints.
 
-#### **bridgeDef.create(iframe, allowedOrigins)**
+### Supported Type Features
 
-Connects to a specific iframe element.
+  * Basic types (string, number, boolean)
+  * Interfaces & Type Aliases
+  * Generic Expansion
+  * Third-party library types (automatically handles import paths)
 
-* **iframe**: HTMLIFrameElement.  
-* **allowedOrigins**: Array of strings (e.g., ['http://localhost:3000']) for security.  
-* **Returns**: Promise resolving to a BridgeInstance.
+## 🔌 API Reference
 
-#### **BridgeInstance.emit(type, data)**
+### `defineBridge<TEmit>(name, methods)`
 
-Sends a typed message to the connected Iframe.
+  * **name**: `string` - Bridge name, determines the generated directory name.
+  * **methods**: `Object` - Collection of methods exposed to the child window.
+  * **TEmit**: `Generic` - (Optional) Defines the event type mapping for messages sent via `emit` from the parent.
 
-### **Client API (iframe-bridge-kit/core)**
+Returns an object containing:
 
-#### **api (Default Export)**
+  * `create(iframeEl, allowedOrigins?)`: Initializes the connection and returns an `{ emit }` object.
 
-A Proxy object. Any method called on this object is sent via penpal to the Host. Returns a Promise.
+### Vite Plugin Options (`IframeBridgeOptions`)
 
-#### **onMessage(type, callback, once?)**
+| Option | Type | Default | Description |
+|:---|:---|:---|:---|
+| `outDir` | `string` | `'bridges'` | Output directory for generated code. Recommended `'src/bridges'`. |
+| `allowedOrigins` | `string[]` | `['*']` | List of allowed origin domains for communication. |
+| `full` | `boolean` | `true` | Whether to generate code containing full dependencies. |
+| `preserveModules` | `string[]` | `[]` | Preserve imports for specific modules instead of expanding types (e.g., `['vue']`). |
 
-Register a listener for events sent from the Host.
+### Generated Child API
 
-* Returns a cleanup function.
+Assuming `outDir` is `src/bridges` and the bridge name is `my-bridge`, you can import from `src/bridges/my-bridge`:
 
-#### **isInit()**
+  * **`default` (ParentApi)**: A proxy object containing all parent methods. All methods return a `Promise`.
+  * **`onMessage(type, callback, once?)`**: Listen for events sent by the parent.
+  * **`offMessage(type, callback?)`**: Remove an event listener.
+  * **`onInit(callback)`**: Triggered when the connection is successfully established.
+  * **`isInit()`**: Returns the current connection status.
 
-Returns boolean. Checks if the connection to the parent is established.
+## ⚠️ Notes
 
-#### **onInit(callback)**
+1.  **Same-Origin Policy**: While Penpal simplifies postMessage, please ensure `allowedOrigins` is correctly configured for security.
+2.  **Build Order**: During production builds, ensure files containing `defineBridge` are correctly processed. Usually, as long as these files are within your source tree (referenced via import), the Vite plugin will scan them.
+3.  **JSON Serialization**: Data transmitted across windows must be JSON serializable (Functions, DOM nodes, etc., are not supported).
 
-Register a callback to run when the connection is established.
+## License
 
-## **License**
-
-MIT © [ZhangSan](https://github.com/mchao123)
+MIT

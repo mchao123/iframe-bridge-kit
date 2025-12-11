@@ -179,4 +179,4 @@ getUserInfo(id: string): Promise<User>
 
 ## License
 
-MIT © ZhangSan
+MIT

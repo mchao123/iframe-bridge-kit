@@ -2,14 +2,14 @@
 
 [English](./README.md) | [简体中文](https://github.com/mchao123/iframe-bridge-kit/blob/master/README_zh.md)
 
-`iframe-bridge-kit` 是一个基于 [Vite](https://vitejs.dev/) 和 [Penpal](https://www.google.com/search?q=https://github.com/google/penpal) 的 iframe 通信库。它通过 Vite 插件自动生成类型定义，让你在 iframe (子窗口) 中调用父窗口方法时，能够享受到 **100% 的 TypeScript 类型提示**，就像调用本地函数一样简单。
+`iframe-bridge-kit` 是一个基于 [Vite](https://vitejs.dev/) 和 [Penpal](https://www.google.com/search?q=https://github.com/google/penpal) 的 iframe 通信库。它通过 Vite 插件自动生成类型定义，让父窗口和 iframe 子窗口可以互相暴露 RPC 方法，并享受到 **100% 的 TypeScript 类型提示**，就像调用本地函数一样简单。
 
 ## ✨ 特性
 
   * 🔒 **类型安全**: 基于源码自动生成 `.d.ts`，父子窗口共享完全一致的类型。
-  * 🚀 **零运行时定义**: 子窗口无需手动定义接口，直接导入生成的桥接文件即可使用。
+  * 🚀 **零重复类型定义**: 另一侧窗口无需手动同步接口，直接导入生成的桥接文件即可使用。
   * 📡 **RPC 风格**: 像调用 `async` 函数一样调用跨窗口方法。
-  * ⚡ **事件机制**: 支持父窗口向子窗口发送强类型的广播消息。
+  * ⚡ **事件机制**: 支持父窗口和 iframe 子窗口发送强类型的广播消息。
   * 🛠 **Vite 集成**: 专为 Vite 生态设计，支持热更新。
 
 ## 📦 安装
@@ -49,7 +49,7 @@ export default defineConfig({
 
 ## 📖 使用指南
 
-### 1\. 父窗口 (Host/Parent)
+### 1\. 父窗口定义 API，iframe 调用父窗口
 
 在父窗口中，使用 `defineBridge` 定义暴露给 iframe 的方法和事件类型。
 
@@ -121,6 +121,59 @@ onMessage('theme-change', (data) => {
 })
 ```
 
+### 3\. iframe 定义 API，父窗口调用 iframe
+
+如果你的主要诉求是先写一个 iframe 页面，再让父窗口兼容这个 iframe，可以在 iframe 项目中使用 `defineIframeBridge`。插件会根据 iframe 暴露的方法生成父窗口可导入的客户端。
+
+```typescript
+// src/iframeBridge.ts (iframe 项目内)
+import { defineIframeBridge } from 'iframe-bridge-kit'
+
+interface ChildEmitMap {
+  'ready': { url: string }
+  'height-change': { height: number }
+}
+
+export const childBridge = defineIframeBridge<ChildEmitMap>('child-app', {
+  async getPageInfo() {
+    return {
+      title: document.title,
+      url: location.href
+    }
+  },
+
+  setTheme(mode: 'dark' | 'light') {
+    document.documentElement.dataset.theme = mode
+    return true
+  }
+})
+
+childBridge.connect().then((parent) => {
+  parent.emit('ready', { url: location.href })
+})
+```
+
+保存后会生成 `src/bridges/child-app/`。父窗口项目可以导入这个目录，并通过 `create(iframe)` 获得 iframe 暴露的强类型方法。
+
+```typescript
+// src/views/Parent.vue (父窗口项目内)
+import ChildBridge from '../bridges/child-app'
+
+const iframe = document.querySelector<HTMLIFrameElement>('#child-app')!
+const child = ChildBridge.create(iframe)
+
+child.onInit(async () => {
+  const info = await child.api.getPageInfo()
+  console.log(info.title)
+
+  await child.api.setTheme('dark')
+})
+
+child.onMessage('height-change', ({ height }) => {
+  iframe.style.height = `${height}px`
+})
+```
+
 ## 🧩 类型支持详情
 
 `iframe-bridge-kit` 的核心魔法在于它如何处理类型。
@@ -152,6 +205,16 @@ getUserInfo(id: string): Promise<User>
 
   * `create(iframeEl, allowedOrigins?)`: 初始化连接，返回 `{ emit }` 对象。
 
+### `defineIframeBridge<TEmit>(name, methods)`
+
+  * **name**: `string` - 桥接名称，决定生成文件的目录名。
+  * **methods**: `Object` - iframe 暴露给父窗口的方法集合。
+  * **TEmit**: `Generic` - (可选) 定义 iframe 通过 `emit` 发送给父窗口的事件类型映射。
+
+返回一个对象，包含：
+
+  * `connect(allowedOrigins?)`: 在 iframe 中连接父窗口，返回 `{ emit, destroy }` 对象。
+
 ### Vite 插件配置 (`IframeBridgeOptions`)
 
 | 选项 | 类型 | 默认值 | 描述 |
@@ -170,6 +233,18 @@ getUserInfo(id: string): Promise<User>
   * **`offMessage(type, callback?)`**: 取消监听。
   * **`onInit(callback)`**: 当连接建立成功时触发。
   * **`isInit()`**: 返回当前连接状态。
+
+### 生成的 Parent API
+
+当桥接来自 `defineIframeBridge` 时，同一个生成目录会导出父窗口客户端：
+
+  * **`create(iframeEl, allowedOrigins?)`**: 初始化与 iframe 的连接，返回 `BridgeConnection`。
+  * **`connection.api`**: iframe 暴露给父窗口的强类型方法代理，所有方法均返回 `Promise`。
+  * **`connection.onMessage(type, callback, once?)`**: 监听 iframe 发出的事件。
+  * **`connection.offMessage(type, callback?)`**: 取消监听。
+  * **`connection.onInit(callback)`**: 当连接建立成功时触发。
+  * **`connection.isInit()`**: 返回当前连接状态。
+  * **`connection.destroy()`**: 断开当前连接。
 
 ## ⚠️ 注意事项
 

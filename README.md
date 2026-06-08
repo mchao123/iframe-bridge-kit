@@ -2,14 +2,14 @@
 
 [English](./README.md) | [简体中文](https://github.com/mchao123/iframe-bridge-kit/blob/master/README_zh.md)
 
-`iframe-bridge-kit` is an iframe communication library based on [Vite](https://vitejs.dev/) and [Penpal](https://www.google.com/search?q=https://github.com/google/penpal). It uses a Vite plugin to automatically generate type definitions, allowing you to call parent window methods from the iframe (child window) with **100% TypeScript type hints**, just like calling local functions.
+`iframe-bridge-kit` is an iframe communication library based on [Vite](https://vitejs.dev/) and [Penpal](https://www.google.com/search?q=https://github.com/google/penpal). It uses a Vite plugin to automatically generate type definitions, allowing the parent window and iframe child window to expose RPC methods to each other with **100% TypeScript type hints**, just like calling local functions.
 
 ## ✨ Features
 
   * 🔒 **Type Safe**: Automatically generates `.d.ts` based on source code; parent and child windows share identical types.
-  * 🚀 **Zero Runtime Definition**: No need to manually define interfaces in the child window; simply import the generated bridge file to use.
+  * 🚀 **No Duplicate Type Definitions**: The other window does not need to manually sync interfaces; simply import the generated bridge file to use.
   * 📡 **RPC Style**: Call cross-window methods just like calling `async` functions.
-  * ⚡ **Event Mechanism**: Supports sending strongly-typed broadcast messages from the parent window to the child window.
+  * ⚡ **Event Mechanism**: Supports strongly-typed broadcast messages from both parent and iframe child windows.
   * 🛠 **Vite Integration**: Designed specifically for the Vite ecosystem with HMR support.
 
 ## 📦 Installation
@@ -49,7 +49,7 @@ export default defineConfig({
 
 ## 📖 Usage Guide
 
-### 1\. Parent Window (Host/Parent)
+### 1\. Parent Defines APIs, Iframe Calls Parent
 
 In the parent window, use `defineBridge` to define the methods and event types exposed to the iframe.
 
@@ -121,6 +121,59 @@ onMessage('theme-change', (data) => {
 })
 ```
 
+### 3\. Iframe Defines APIs, Parent Calls Iframe
+
+If your main use case is to build an iframe page first and let the parent window integrate with it, use `defineIframeBridge` inside the iframe project. The plugin will generate a parent-side client from the methods exposed by the iframe.
+
+```typescript
+// src/iframeBridge.ts (inside the iframe project)
+import { defineIframeBridge } from 'iframe-bridge-kit'
+
+interface ChildEmitMap {
+  'ready': { url: string }
+  'height-change': { height: number }
+}
+
+export const childBridge = defineIframeBridge<ChildEmitMap>('child-app', {
+  async getPageInfo() {
+    return {
+      title: document.title,
+      url: location.href
+    }
+  },
+
+  setTheme(mode: 'dark' | 'light') {
+    document.documentElement.dataset.theme = mode
+    return true
+  }
+})
+
+childBridge.connect().then((parent) => {
+  parent.emit('ready', { url: location.href })
+})
+```
+
+After saving, the plugin generates `src/bridges/child-app/`. The parent project can import that directory and call `create(iframe)` to get strongly-typed methods exposed by the iframe.
+
+```typescript
+// src/views/Parent.vue (inside the parent project)
+import ChildBridge from '../bridges/child-app'
+
+const iframe = document.querySelector<HTMLIFrameElement>('#child-app')!
+const child = ChildBridge.create(iframe)
+
+child.onInit(async () => {
+  const info = await child.api.getPageInfo()
+  console.log(info.title)
+
+  await child.api.setTheme('dark')
+})
+
+child.onMessage('height-change', ({ height }) => {
+  iframe.style.height = `${height}px`
+})
+```
+
 ## 🧩 Type Support Details
 
 The core magic of `iframe-bridge-kit` lies in how it handles types.
@@ -152,6 +205,16 @@ Returns an object containing:
 
   * `create(iframeEl, allowedOrigins?)`: Initializes the connection and returns an `{ emit }` object.
 
+### `defineIframeBridge<TEmit>(name, methods)`
+
+  * **name**: `string` - Bridge name, determines the generated directory name.
+  * **methods**: `Object` - Collection of methods exposed from the iframe to the parent window.
+  * **TEmit**: `Generic` - (Optional) Defines the event type mapping for messages sent via `emit` from the iframe.
+
+Returns an object containing:
+
+  * `connect(allowedOrigins?)`: Connects to the parent window from inside the iframe and returns an `{ emit, destroy }` object.
+
 ### Vite Plugin Options (`IframeBridgeOptions`)
 
 | Option | Type | Default | Description |
@@ -170,6 +233,18 @@ Assuming `outDir` is `src/bridges` and the bridge name is `my-bridge`, you can i
   * **`offMessage(type, callback?)`**: Remove an event listener.
   * **`onInit(callback)`**: Triggered when the connection is successfully established.
   * **`isInit()`**: Returns the current connection status.
+
+### Generated Parent API
+
+When the bridge comes from `defineIframeBridge`, the same generated directory exports a parent-side client:
+
+  * **`create(iframeEl, allowedOrigins?)`**: Initializes the connection to the iframe and returns a `BridgeConnection`.
+  * **`connection.api`**: A strongly-typed proxy for methods exposed by the iframe. All methods return a `Promise`.
+  * **`connection.onMessage(type, callback, once?)`**: Listen for events sent by the iframe.
+  * **`connection.offMessage(type, callback?)`**: Remove an event listener.
+  * **`connection.onInit(callback)`**: Triggered when the connection is successfully established.
+  * **`connection.isInit()`**: Returns the current connection status.
+  * **`connection.destroy()`**: Disconnects the current connection.
 
 ## ⚠️ Notes
 

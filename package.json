@@ -1,6 +1,6 @@
 {
   "name": "iframe-bridge-kit",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "A type-safe communication bridge for iframes. Define strongly typed RPC APIs for cross-window messaging with ease.",
   "main": "dist/index.js",
   "module": "dist/index.mjs",

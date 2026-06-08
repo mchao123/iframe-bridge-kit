@@ -28,11 +28,13 @@ interface MethodInfo {
 
 interface BridgeInfo {
     name: string
+    target: 'child' | 'parent'
     methods: MethodInfo[]
     sourceFile: string
     typeDeclarations: { name: string; content: string }[] // Changed to structured info
     imports: Map<string, Set<string>> // 模块名 (absolute or package) -> 导入的类型名集合
     emitMap?: { name: string; type: string }[]
+    emitTypeName?: string
 }
 
 const packageName = packageJson.name
@@ -253,8 +255,8 @@ function parseBridgeFromCode(code: string, filePath: string): { results: BridgeI
         }
     }
 
-    // Step 1: 查找从 iframe-bridge-kit 导入的 defineBridge 的本地名称
-    const defineBridgeNames = new Set<string>()
+    // Step 1: 查找从 iframe-bridge-kit 导入的 bridge 定义函数的本地名称
+    const bridgeFactories = new Map<string, BridgeInfo['target']>()
 
     for (const stmt of sourceFile.statements) {
         if (
@@ -267,24 +269,28 @@ function parseBridgeFromCode(code: string, filePath: string): { results: BridgeI
                 for (const element of namedBindings.elements) {
                     const originalName = element.propertyName?.text ?? element.name.text
                     if (originalName === 'defineBridge') {
-                        defineBridgeNames.add(element.name.text)
+                        bridgeFactories.set(element.name.text, 'child')
+                    }
+                    if (originalName === 'defineIframeBridge') {
+                        bridgeFactories.set(element.name.text, 'parent')
                     }
                 }
             }
         }
     }
 
-    if (defineBridgeNames.size === 0) {
+    if (bridgeFactories.size === 0) {
         return { results, cleanup }
     }
 
-    // Step 2: 遍历 AST 查找 defineBridge 调用
+    // Step 2: 遍历 AST 查找 bridge 定义调用
     const visit = (node: ts.Node) => {
         if (
             ts.isCallExpression(node) &&
             ts.isIdentifier(node.expression) &&
-            defineBridgeNames.has(node.expression.text)
+            bridgeFactories.has(node.expression.text)
         ) {
+            const target = bridgeFactories.get(node.expression.text)!
             const [nameArg, methodsArg] = node.arguments
 
             // 提取 name
@@ -409,8 +415,12 @@ function parseBridgeFromCode(code: string, filePath: string): { results: BridgeI
             }
 
             const emitMap: { name: string; type: string }[] = []
+            let emitTypeName: string | undefined
             if (node.typeArguments && node.typeArguments.length > 0) {
                 const emitTypeNode = node.typeArguments[0]
+                if (ts.isTypeReferenceNode(emitTypeNode) && ts.isIdentifier(emitTypeNode.typeName)) {
+                    emitTypeName = emitTypeNode.typeName.text
+                }
                 const emitType = checker.getTypeFromTypeNode(emitTypeNode)
 
                 emitType.getProperties().forEach(prop => {
@@ -429,11 +439,13 @@ function parseBridgeFromCode(code: string, filePath: string): { results: BridgeI
 
             results.push({
                 name: bridgeName,
+                target,
                 methods,
                 sourceFile: filePath,
                 typeDeclarations,
                 imports: bridgeImports,
-                emitMap
+                emitMap,
+                emitTypeName
             })
         }
 
@@ -722,6 +734,60 @@ function generateDtsContent(info: BridgeInfo, outDir: string, preserveModules: s
         }
     }
 
+    const localTypeDeclarations = info.typeDeclarations.filter(({ name }) => name !== info.emitTypeName && name !== 'EmitMap')
+
+    if (localTypeDeclarations.length > 0) {
+        lines.push('// Local type definitions')
+        for (const { content } of localTypeDeclarations) {
+            lines.push(content)
+            lines.push('')
+        }
+    }
+
+    if (info.target === 'parent') {
+        if (processedEmitTypes.length > 0) {
+            lines.push('export interface EmitMap {')
+            processedEmitTypes.forEach(e => {
+                lines.push(`    "${e.name}": ${e.type};`)
+            })
+            lines.push('}')
+            lines.push('')
+        }
+
+        lines.push('export interface BridgeConnection {')
+        lines.push('    api: {')
+        lines.push(
+            ...processedMethods
+                .map(m =>
+                    (m.jsdoc ? `        ${m.jsdoc}\n` : '') +
+                    `        ${m.name}: (${m.params}) => ${m.returnType},`
+                )
+        )
+        lines.push('    };')
+
+        if (processedEmitTypes.length > 0) {
+            lines.push('    onMessage<K extends keyof EmitMap>(type: K, cb: (data: EmitMap[K]) => void, once?: boolean): () => void;')
+            lines.push('    onMessage(type: string, cb: Function, once?: boolean): () => void;')
+            lines.push('    offMessage<K extends keyof EmitMap>(type: K, fn?: (data: EmitMap[K]) => void): void;')
+            lines.push('    offMessage(type: string, fn?: Function): void;')
+        } else {
+            lines.push('    onMessage(type: string, cb: Function, once?: boolean): () => void;')
+            lines.push('    offMessage(type: string, fn?: Function): void;')
+        }
+
+        lines.push('    isInit(): boolean;')
+        lines.push('    onInit(cb: Function): void;')
+        lines.push('    destroy(): void;')
+        lines.push('}')
+        lines.push('')
+        lines.push('export declare function create(iframe: HTMLIFrameElement, allowedOrigins?: string[]): BridgeConnection;')
+        lines.push('declare const bridge: { create: typeof create };')
+        lines.push('export default bridge;')
+        lines.push('')
+
+        return lines.join('\n')
+    }
+
     if (processedEmitTypes.length > 0) {
         lines.push('export interface EmitMap {')
         processedEmitTypes.forEach(e => {
@@ -796,7 +862,7 @@ function processFile(filePath: string, code: string, options: IframeBridgeOption
         // 立即写入类型文件和运行时文件
         for (const bridge of bridges) {
             writeDtsFile(bridge, options)
-            writeBridgeRuntime(bridge.name, options)
+            writeBridgeRuntime(bridge, options)
         }
 
         cleanup()
@@ -813,7 +879,7 @@ function processFile(filePath: string, code: string, options: IframeBridgeOption
 /**
  * 拷贝核心文件到指定 bridge 目录并替换配置
  */
-function writeBridgeRuntime(bridgeName: string, options: IframeBridgeOptions) {
+function writeBridgeRuntime(info: BridgeInfo, options: IframeBridgeOptions) {
     const isFull = options.full !== false
     const allowedOrigins = options.allowedOrigins || ['*']
     const outDir = options.outDir || 'bridges'
@@ -842,7 +908,7 @@ function writeBridgeRuntime(bridgeName: string, options: IframeBridgeOptions) {
     }
 
     // 目标目录
-    const absoluteOutDir = path.resolve(process.cwd(), outDir, bridgeName)
+    const absoluteOutDir = path.resolve(process.cwd(), outDir, info.name)
     if (!fs.existsSync(absoluteOutDir)) {
         fs.mkdirSync(absoluteOutDir, { recursive: true })
     }
@@ -850,9 +916,10 @@ function writeBridgeRuntime(bridgeName: string, options: IframeBridgeOptions) {
     // 需要复制的文件扩展名
     const extensions = ['js', 'mjs']
     const replaceContent = JSON.stringify(allowedOrigins).slice(1, - 1)
+    const runtimeName = info.target === 'parent' ? 'parent-core' : 'core'
 
     for (const ext of extensions) {
-        const srcFile = path.join(coreDir, `core.${ext}`)
+        const srcFile = path.join(coreDir, `${runtimeName}.${ext}`)
         if (fs.existsSync(srcFile)) {
             try {
                 let content = fs.readFileSync(srcFile, 'utf-8')

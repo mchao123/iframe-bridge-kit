@@ -22,9 +22,9 @@ const conn = connect({
 
 export default new Proxy({}, {
     get(_, prop) {
-        return async (args: any) => {
+        return async (...args: any[]) => {
             // @ts-ignore
-            return await conn.promise.then(e => e[prop](args))
+            return await conn.promise.then(e => e[prop](...args))
         }
     }
 })
@@ -33,7 +33,7 @@ export default new Proxy({}, {
 export const onMessage = (type: string, cb: Function, once?: boolean) => {
     const fn = once ? ((data: any) => {
         cb(data)
-        offMessage(type, cb)
+        offMessage(type, fn)
     }) : cb
     const fns = msgProxy.get(type)
 

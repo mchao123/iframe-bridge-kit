@@ -2,6 +2,7 @@ import type { Plugin, ViteDevServer } from 'vite'
 import * as ts from 'typescript'
 import * as path from 'path'
 import * as fs from 'fs'
+import { createRequire } from 'module'
 import packageJson from '../package.json'
 
 export interface IframeBridgeOptions {
@@ -38,6 +39,25 @@ interface BridgeInfo {
 }
 
 const packageName = packageJson.name
+const requireFromCwd = createRequire(path.join(process.cwd(), 'package.json'))
+
+function getCoreDirs(variant: string): string[] {
+    const dirs: string[] = []
+
+    try {
+        const viteEntry = requireFromCwd.resolve(`${packageName}/vite`)
+        dirs.push(path.join(path.dirname(viteEntry), variant))
+    } catch {
+        // Ignore resolution failures and use local development fallbacks below.
+    }
+
+    dirs.push(
+        path.resolve(process.cwd(), 'node_modules', packageName, 'dist', variant),
+        path.resolve(process.cwd(), 'dist', variant)
+    )
+
+    return Array.from(new Set(dirs))
+}
 
 /**
  * 从 .vue 文件中提取 <script> 或 <script setup> 标签的内容
@@ -795,20 +815,12 @@ function generateDtsContent(info: BridgeInfo, outDir: string, preserveModules: s
         })
         lines.push('}')
         lines.push('')
-        lines.push('export declare function onMessage<K extends keyof EmitMap>(type: K, cb: (data: EmitMap[K]) => void, once?: boolean): () => void;')
-        lines.push('export declare function onMessage(type: string, cb: Function, once?: boolean): () => void;')
-        lines.push('export declare function offMessage<K extends keyof EmitMap>(type: K, fn?: (data: EmitMap[K]) => void): void;')
-        lines.push('export declare function offMessage(type: string, fn?: Function): void;')
-    } else {
-        lines.push('export declare function onMessage(type: string, cb: Function, once?: boolean): () => void;')
-        lines.push('export declare function offMessage(type: string, fn?: Function): void;')
     }
 
-    lines.push('export declare function isInit(): boolean;')
-    lines.push('export declare function onInit(cb: Function): void;')
+    lines.push('export declare function createBridgeClient(remoteWindow: Window, allowedOrigins?: string[]): BridgeClient;')
     lines.push('')
 
-    lines.push(`export default {} as {`)
+    lines.push(`export interface BridgeApi {`)
     lines.push(
         ...processedMethods
             .map(m =>
@@ -817,6 +829,24 @@ function generateDtsContent(info: BridgeInfo, outDir: string, preserveModules: s
             )
     )
     lines.push('}')
+    lines.push('')
+    lines.push('export type BridgeClient = BridgeApi & {')
+    if (processedEmitTypes.length > 0) {
+        lines.push('    onMessage<K extends keyof EmitMap>(type: K, cb: (data: EmitMap[K]) => void, once?: boolean): () => void;')
+        lines.push('    onMessage(type: string, cb: Function, once?: boolean): () => void;')
+        lines.push('    offMessage<K extends keyof EmitMap>(type: K, fn?: (data: EmitMap[K]) => void): void;')
+        lines.push('    offMessage(type: string, fn?: Function): void;')
+    } else {
+        lines.push('    onMessage(type: string, cb: Function, once?: boolean): () => void;')
+        lines.push('    offMessage(type: string, fn?: Function): void;')
+    }
+    lines.push('    isInit(): boolean;')
+    lines.push('    onInit(cb: (api: BridgeClient) => void): void;')
+    lines.push('    destroy(): void;')
+    lines.push('}')
+    lines.push('')
+    lines.push('declare const createBridge: () => BridgeClient;')
+    lines.push('export default createBridge;')
     lines.push('')
 
     return lines.join('\n')
@@ -887,16 +917,8 @@ function writeBridgeRuntime(info: BridgeInfo, options: IframeBridgeOptions) {
     // 定位 core 文件
     const variant = isFull ? 'full' : 'mini'
 
-    // 尝试不同的路径策略
-    const basePaths = [
-        // 1. 假设我们在 dist 目录中运行
-        path.resolve(__dirname, variant),
-        // 2. 假设我们在 src 目录中运行
-        path.resolve(__dirname, '../dist', variant),
-    ]
-
     let coreDir = ''
-    for (const p of basePaths) {
+    for (const p of getCoreDirs(variant)) {
         if (fs.existsSync(p)) {
             coreDir = p
             break
@@ -934,59 +956,6 @@ function writeBridgeRuntime(info: BridgeInfo, options: IframeBridgeOptions) {
                 console.error(`[iframe-bridge] Failed to copy core.${ext}:`, err)
             }
         }
-    }
-}
-
-/**
- * 拷贝核心文件并替换配置 (Unused)
- */
-function copyCoreFile_Unused(options: IframeBridgeOptions) {
-    const isFull = options.full !== false
-    const allowedOrigins = options.allowedOrigins || ['*']
-    const outDir = options.outDir || 'bridges'
-
-    // 定位 core 文件
-    let corePath = ''
-    const variant = isFull ? 'full' : 'mini'
-
-    // 尝试不同的路径策略
-    const possiblePaths = [
-        // 1. 假设我们在 dist 目录中运行
-        path.resolve(__dirname, variant, 'core.js'),
-        // 2. 假设我们在 src 目录中运行
-        path.resolve(__dirname, '../dist', variant, 'core.js'),
-    ]
-
-    for (const p of possiblePaths) {
-        if (fs.existsSync(p)) {
-            corePath = p
-            break
-        }
-    }
-
-    if (!corePath) {
-        // 开发环境下忽略警告，可能是因为还没构建
-        return
-    }
-
-    try {
-        let content = fs.readFileSync(corePath, 'utf-8')
-
-        // 替换 AllowedOrigins
-        const replaceContent = JSON.stringify(allowedOrigins)
-        content = content.replace(/"__AllowedOrigins__"/g, replaceContent)
-        content = content.replace(/'__AllowedOrigins__'/g, replaceContent)
-
-        // 写入输出目录
-        const absoluteOutDir = path.resolve(process.cwd(), outDir)
-        if (!fs.existsSync(absoluteOutDir)) {
-            fs.mkdirSync(absoluteOutDir, { recursive: true })
-        }
-
-        const destPath = path.join(absoluteOutDir, 'core.js')
-        fs.writeFileSync(destPath, content, 'utf-8')
-    } catch (err) {
-        console.error(`[iframe-bridge] Failed to copy core file:`, err)
     }
 }
 
